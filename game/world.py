@@ -13,7 +13,6 @@ class Tile:
         self.growth_time = 0
         self.has_forage = False
         self.forage_type = None
-        self.is_fish_spot = False
 
 class Crop:
     def __init__(self, type, growth_time):
@@ -39,7 +38,6 @@ class World:
         
         # Areas
         self.farm_area = (10, 10, 20, 15)  # x, y, width, height
-        self.fishing_spots = []
         self.foraging_areas = []
         
         # Home position - define this BEFORE calling generate_world
@@ -47,14 +45,6 @@ class World:
         
         # Now generate the world
         self.generate_world()
-        
-        # Create fishing spots (in water areas)
-        for _ in range(5):
-            x = random.randint(0, self.width - 1)
-            y = random.randint(0, self.height - 1)
-            if self.tiles[x][y].type == "water":
-                self.tiles[x][y].is_fish_spot = True
-                self.fishing_spots.append((x, y))
         
         # Create foraging areas
         for _ in range(20):
@@ -78,11 +68,18 @@ class World:
                 if 35 <= x <= 38:
                     tile_type = "water"
                 
-                # Create a lake
-                lake_center_x, lake_center_y = 45, 15
-                lake_radius = 5
-                if (x - lake_center_x) ** 2 + (y - lake_center_y) ** 2 <= lake_radius ** 2:
-                    tile_type = "water"
+                # Create multiple lakes
+                lakes = [
+                    (45, 15, 5),  # x, y, radius
+                    (15, 30, 4),
+                    (25, 8, 3),
+                    (8, 20, 3)
+                ]
+                
+                for lake_x, lake_y, radius in lakes:
+                    if (x - lake_x) ** 2 + (y - lake_y) ** 2 <= radius ** 2:
+                        tile_type = "water"
+                        break
                 
                 # Create some trees and rocks
                 if tile_type == "grass" and random.random() < 0.05:
@@ -174,9 +171,17 @@ class World:
         return None, 0
     
     def start_fishing(self, x, y):
-        tile = self.get_tile(x, y)
-        if tile and tile.is_fish_spot:
-            return True
+        """检查是否可以在指定位置钓鱼
+        现在任何水域都可以钓鱼，不再需要特定的钓鱼点
+        """
+        # 检查玩家周围是否有水
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                check_x = x + dx
+                check_y = y + dy
+                tile = self.get_tile(check_x, check_y)
+                if tile and tile.type == "water":
+                    return True
         return False
     
     def catch_fish(self, difficulty=1.0):
@@ -238,9 +243,13 @@ class World:
         view_y_end = min(self.height, view_y_start + self.config.view_height)
         
         tile_size = self.config.tile_size
-        # 使用支持ASCII字符的字体
-        from game.util import get_font
-        font = get_font(is_ascii=True, size=tile_size)
+        
+        # 在类外部只导入一次get_font，不要在每次draw时导入
+        font = self.config.ascii_font
+        if font is None:
+            from game.util import get_font
+            font = get_font(is_ascii=True, size=tile_size)
+            self.config.ascii_font = font  # 存储在config中重复使用
         
         # Store these values as attributes so player and cat classes can use them
         self.view_x_start = view_x_start
@@ -249,66 +258,99 @@ class World:
         # Draw visible tiles
         for x in range(view_x_start, view_x_end):
             for y in range(view_y_start, view_y_end):
-                # Skip drawing the tile if it's the player's position
+                # 跳过玩家所在位置
                 if x == player.x and y == player.y:
                     continue
-                
+                    
+                tile = self.tiles[x][y]
+                # Calculate screen position
                 screen_x = (x - view_x_start) * tile_size
                 screen_y = (y - view_y_start) * tile_size
                 
-                tile = self.tiles[x][y]
+                # Get the appropriate ASCII character for this tile
+                tile_symbol = self.get_tile_symbol(tile)
                 
-                # Determine the character to display
-                char = self.config.ascii_tiles["grass"]  # Default
-                color = self.config.colors["grass"]
+                # Get the appropriate color for this tile
+                tile_color = self.get_tile_color(tile)
                 
-                if tile.type == "water":
-                    char = self.config.ascii_tiles["water"]
-                    color = self.config.colors["water"]
-                elif tile.type == "untilled_soil":
-                    char = self.config.ascii_tiles["untilled_soil"]
-                    color = self.config.colors["soil"]
-                elif tile.type == "tilled_soil":
-                    char = self.config.ascii_tiles["tilled_soil"]
-                    color = self.config.colors["soil"]
-                elif tile.type == "watered_soil":
-                    char = self.config.ascii_tiles["watered_soil"]
-                    color = self.config.colors["soil"]
-                elif tile.type == "tree":
-                    char = self.config.ascii_tiles["tree"]
-                    color = self.config.colors["tree"]
-                elif tile.type == "rock":
-                    char = self.config.ascii_tiles["rock"]
-                    color = self.config.colors["rock"]
-                elif tile.type == "house":
-                    char = self.config.ascii_tiles["house"]
-                    color = self.config.colors["house"]
-                
-                # Fish spots
-                if tile.is_fish_spot:
-                    char = self.config.ascii_tiles["fish_spot"]
-                    color = self.config.colors["fish_spot"]
-                
-                # Forage items
-                if tile.has_forage:
-                    char = self.config.ascii_tiles["forage"]
-                    color = self.config.colors["forage"]
-                
-                # Crops
-                if tile.crop:
-                    if tile.crop.is_ready:
-                        char = self.config.ascii_tiles["crop_ready"]
-                    else:
-                        # Calculate growth stage (0-3)
-                        growth_pct = tile.crop.growth_days / tile.crop.growth_time
-                        if growth_pct < 0.33:
-                            char = self.config.ascii_tiles["crop_stage_1"]
-                        elif growth_pct < 0.66:
-                            char = self.config.ascii_tiles["crop_stage_2"]
-                        else:
-                            char = self.config.ascii_tiles["crop_stage_3"]
-                    color = self.config.colors["crop"]
-                
-                # Draw the character
-                text_surface = font.render(char, True, color)
-                screen.blit(text_surface, (screen_x, screen_y)) 
+                # Draw the tile using ASCII art
+                text_surface = font.render(tile_symbol, True, tile_color)
+                screen.blit(text_surface, (screen_x, screen_y))
+    
+    def get_tile_symbol(self, tile):
+        """获取瓦片的ASCII符号"""
+        char = self.config.ascii_tiles["grass"]  # Default
+        
+        if tile.type == "water":
+            char = self.config.ascii_tiles["water"]
+        elif tile.type == "untilled_soil":
+            char = self.config.ascii_tiles["untilled_soil"]
+        elif tile.type == "tilled_soil":
+            char = self.config.ascii_tiles["tilled_soil"]
+        elif tile.type == "watered_soil":
+            char = self.config.ascii_tiles["watered_soil"]
+        elif tile.type == "tree":
+            char = self.config.ascii_tiles["tree"]
+        elif tile.type == "rock":
+            char = self.config.ascii_tiles["rock"]
+        elif tile.type == "house":
+            char = self.config.ascii_tiles["house"]
+        
+        # Forage items
+        if tile.has_forage:
+            char = self.config.ascii_tiles["forage"]
+        
+        # Crops
+        if tile.crop:
+            if tile.crop.is_ready:
+                char = self.config.ascii_tiles["crop_ready"]
+            else:
+                # Calculate growth stage (0-3)
+                growth_pct = tile.crop.growth_days / tile.crop.growth_time
+                if growth_pct < 0.33:
+                    char = self.config.ascii_tiles["crop_stage_1"]
+                elif growth_pct < 0.66:
+                    char = self.config.ascii_tiles["crop_stage_2"]
+                else:
+                    char = self.config.ascii_tiles["crop_stage_3"]
+        
+        return char
+    
+    def get_tile_color(self, tile):
+        """获取瓦片的颜色"""
+        color = self.config.colors["grass"]  # Default
+        
+        if tile.type == "water":
+            color = self.config.colors["water"]
+        elif tile.type in ["untilled_soil", "tilled_soil", "watered_soil"]:
+            color = self.config.colors["soil"]
+        elif tile.type == "tree":
+            color = self.config.colors["tree"]
+        elif tile.type == "rock":
+            color = self.config.colors["rock"]
+        elif tile.type == "house":
+            color = self.config.colors["house"]
+        
+        # Forage items
+        if tile.has_forage:
+            color = self.config.colors["forage"]
+        
+        # Crops
+        if tile.crop:
+            color = self.config.colors["crop"]
+        
+        return color
+    
+    def has_adjacent_land(self, x, y):
+        """检查水域周围是否有可站立的陆地"""
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                    
+                new_x, new_y = x + dx, y + dy
+                if 0 <= new_x < self.width and 0 <= new_y < self.height:
+                    tile = self.tiles[new_x][new_y]
+                    if tile.type in ["grass", "untilled_soil", "tilled_soil", "watered_soil"]:
+                        return True
+        return False 

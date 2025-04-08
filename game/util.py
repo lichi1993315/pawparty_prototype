@@ -38,7 +38,7 @@ def load_ascii_font(size=24):
     for font_name in ascii_system_fonts:
         try:
             font = pygame.font.SysFont(font_name, size)
-            print(f"加载ASCII字体: {font_name}")
+            # print(f"加载ASCII字体: {font_name}")  # 注释掉这行，避免频繁打印
             return font
         except:
             pass
@@ -47,19 +47,21 @@ def load_ascii_font(size=24):
     print("使用默认ASCII字体")
     return pygame.font.Font(None, size)
 
-# 全局字体对象，避免重复加载
-chinese_font = None
-ascii_font = None
+# 创建字体缓存字典
+font_cache = {}
 
 def get_font(is_ascii=False, size=24):
-    """根据需要获取适当的字体"""
-    global chinese_font, ascii_font
+    """根据需要获取适当的字体，使用缓存避免重复加载"""
+    global font_cache
     
-    if is_ascii:
-        if ascii_font is None or ascii_font.get_height() != size:
-            ascii_font = load_ascii_font(size)
-        return ascii_font
-    else:
-        if chinese_font is None or chinese_font.get_height() != size:
-            chinese_font = load_chinese_font(size)
-        return chinese_font 
+    # 创建缓存键
+    cache_key = f"{'ascii' if is_ascii else 'chinese'}_{size}"
+    
+    # 检查缓存中是否已有此字体
+    if cache_key not in font_cache:
+        if is_ascii:
+            font_cache[cache_key] = load_ascii_font(size)
+        else:
+            font_cache[cache_key] = load_chinese_font(size)
+    
+    return font_cache[cache_key] 

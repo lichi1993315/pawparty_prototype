@@ -1,1 +1,3 @@
-pygame==2.5.2 
+pygame==2.6.1
+# 如果需要更多字体支持，可以考虑添加
+# pygame-font-freetype

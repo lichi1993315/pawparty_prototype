@@ -6,7 +6,8 @@ from game.cat import Cat
 from game.ui import UI
 from game.time_system import TimeSystem
 from game.config import Config
-from game.util import get_font
+# 注释掉原来的导入，直接在这里实现字体加载
+# from game.util import get_font
 
 class Game:
     def __init__(self):
@@ -15,6 +16,9 @@ class Game:
         self.width, self.height = self.config.screen_width, self.config.screen_height
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("猫咪小镇 ASCII Prototype")
+        
+        # 初始化字体
+        self.initialize_fonts()
         
         self.clock = pygame.time.Clock()
         self.fps = 60
@@ -43,6 +47,18 @@ class Game:
             "边界": "地图边界"
         }
     
+    def initialize_fonts(self):
+        """初始化字体并添加错误处理"""
+        try:
+            # 尝试加载系统字体，支持中文
+            self.debug_font = pygame.font.SysFont('microsoftyahei', 14)
+            print("成功加载系统字体")
+        except Exception as e:
+            print(f"加载系统字体失败: {e}")
+            # 回退到默认字体
+            self.debug_font = pygame.font.Font(None, 14)
+            print("使用默认字体代替")
+    
     def translate_obstacle(self, obstacle_type):
         """将障碍物类型翻译为中文显示"""
         return self.obstacle_types.get(obstacle_type, obstacle_type)
@@ -57,59 +73,119 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
             
+            # 如果文本输入框激活，优先处理文本输入
+            if self.ui.show_text_input:
+                input_result = self.ui.handle_text_input(event)
+                if input_result:
+                    # 处理完成的输入文本
+                    self.process_cat_dialog(input_result)
+                continue
+            
             # Handle key presses
             if event.type == pygame.KEYDOWN:
                 key_name = pygame.key.name(event.key)
                 self.add_debug_message(f"按键: {key_name}")
                 
+                # 如果正在显示交互菜单，处理菜单操作
+                if self.ui.show_interaction_menu:
+                    if event.key == pygame.K_w or event.key == pygame.K_UP:
+                        self.ui.select_prev_interaction()
+                    elif event.key == pygame.K_s or event.key == pygame.K_DOWN:
+                        self.ui.select_next_interaction()
+                    elif event.key == pygame.K_e or event.key == pygame.K_RETURN:
+                        self.handle_cat_interaction(self.ui.get_selected_interaction())
+                    elif event.key == pygame.K_ESCAPE:
+                        self.ui.hide_interaction_menu()
+                    # 阻止其他按键处理
+                    return
+                
+                # 如果猫被举起，处理猫的投掷
+                if self.cat.is_picked_up:
+                    if event.key == pygame.K_w or event.key == pygame.K_UP:
+                        self.cat.throw(0)  # 向上丢
+                        self.add_debug_message(f"互动: 将猫丢向上方")
+                    elif event.key == pygame.K_d or event.key == pygame.K_RIGHT:
+                        self.cat.throw(1)  # 向右丢
+                        self.add_debug_message(f"互动: 将猫丢向右方")
+                    elif event.key == pygame.K_s or event.key == pygame.K_DOWN:
+                        self.cat.throw(2)  # 向下丢
+                        self.add_debug_message(f"互动: 将猫丢向下方")
+                    elif event.key == pygame.K_a or event.key == pygame.K_LEFT:
+                        self.cat.throw(3)  # 向左丢
+                        self.add_debug_message(f"互动: 将猫丢向左方")
+                    elif event.key == pygame.K_e:
+                        # 放下猫
+                        self.cat.is_picked_up = False
+                        self.cat.x = self.player.x
+                        self.cat.y = self.player.y
+                        self.add_debug_message(f"互动: 放下了猫")
+                    return
+                
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
+                elif event.key == pygame.K_t:  # 打开文本输入框
+                    self.ui.toggle_text_input()
                 elif event.key == pygame.K_e:  # 自动交互 - 无需手动切换工具
-                    interact_result = self.player.interact(self.world, self.cat)
-                    
-                    # 处理交互结果
-                    if isinstance(interact_result, tuple):
-                        # 返回了(True/False, 交互类型)
-                        success, interaction_type = interact_result
+                    if self.player.fishing_active:
+                        # 如果正在钓鱼，尝试收杆
+                        result, fish_type, value = self.player.try_catch_fish()
+                        if result == "fish_caught":
+                            self.add_debug_message(f"钓鱼: 成功钓到了{fish_type}! 获得{value}金币")
+                        elif result == "fish_escape":
+                            self.add_debug_message(f"钓鱼: 鱼跑掉了...")
+                    else:
+                        # 检查是否与猫交互
+                        if self.is_near_cat():
+                            # 打开猫咪交互菜单
+                            self.ui.show_cat_interaction_menu()
+                            return
                         
-                        if success:
-                            # 障碍物交互反馈
-                            if interaction_type == "tree":
-                                translated_obstacle = self.translate_obstacle(interaction_type)
-                                self.add_debug_message(f"互动: 发现{translated_obstacle}")
-                                self.add_debug_message(f"这棵{translated_obstacle}很高大，需要斧头才能砍伐")
-                            elif interaction_type == "rock":
-                                translated_obstacle = self.translate_obstacle(interaction_type)
-                                self.add_debug_message(f"互动: 发现{translated_obstacle}")
-                                self.add_debug_message(f"这块{translated_obstacle}很坚硬，需要镐才能开采")
-                            elif interaction_type == "water":
-                                translated_obstacle = self.translate_obstacle(interaction_type)
-                                self.add_debug_message(f"互动: 发现{translated_obstacle}")
-                                self.add_debug_message(f"这片{translated_obstacle}很深，需要桥或船才能通过")
-                            # 自动工具使用反馈
-                            elif interaction_type == "harvest":
-                                self.add_debug_message(f"互动: 成功收获了农作物")
-                            elif interaction_type == "forage":
-                                self.add_debug_message(f"互动: 成功采集了野生物品") 
-                            elif interaction_type == "cat":
-                                self.add_debug_message(f"互动: 与猫咪互动，好感度提升")
-                            elif interaction_type == "tilling":
-                                self.add_debug_message(f"互动: 使用锄头耕作了土地")
-                            elif interaction_type == "watering":
-                                self.add_debug_message(f"互动: 使用浇水壶浇了水")
-                            elif interaction_type == "planting":
-                                seed_name = self.player.selected_seed.split("_")[0]
-                                self.add_debug_message(f"互动: 种植了{seed_name}种子")
-                            elif interaction_type == "fishing":
-                                self.add_debug_message(f"互动: 开始钓鱼...")
-                                # 当前工具显示为钓鱼竿
-                                self.current_tool = "fishing_rod"
+                        # 尝试开始钓鱼或其他交互
+                        if self.player.use_fishing_rod(self.world):  # 使用use_fishing_rod替代start_fishing
+                            self.add_debug_message(f"钓鱼: 开始钓鱼...")
                         else:
-                            if interaction_type:
-                                translated_type = self.translate_obstacle(interaction_type)
-                                self.add_debug_message(f"互动: 无法与{translated_type}互动")
-                            else:
-                                self.add_debug_message(f"互动: 这里没有可以互动的物体")
+                            # 如果不能钓鱼，尝试其他交互
+                            interact_result = self.player.interact(self.world, self.cat)
+                            
+                            # 处理交互结果
+                            if isinstance(interact_result, tuple):
+                                # 返回了(True/False, 交互类型)
+                                success, interaction_type = interact_result
+                                
+                                if success:
+                                    # 障碍物交互反馈
+                                    if interaction_type == "tree":
+                                        translated_obstacle = self.translate_obstacle(interaction_type)
+                                        self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                        self.add_debug_message(f"这棵{translated_obstacle}很高大，需要斧头才能砍伐")
+                                    elif interaction_type == "rock":
+                                        translated_obstacle = self.translate_obstacle(interaction_type)
+                                        self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                        self.add_debug_message(f"这块{translated_obstacle}很坚硬，需要镐才能开采")
+                                    elif interaction_type == "water":
+                                        translated_obstacle = self.translate_obstacle(interaction_type)
+                                        self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                        self.add_debug_message(f"这片{translated_obstacle}很深，需要桥或船才能通过")
+                                    # 自动工具使用反馈
+                                    elif interaction_type == "harvest":
+                                        self.add_debug_message(f"互动: 成功收获了农作物")
+                                    elif interaction_type == "forage":
+                                        self.add_debug_message(f"互动: 成功采集了野生物品") 
+                                    elif interaction_type == "cat":
+                                        self.add_debug_message(f"互动: 与猫咪互动，好感度提升")
+                                    elif interaction_type == "tilling":
+                                        self.add_debug_message(f"互动: 使用锄头耕作了土地")
+                                    elif interaction_type == "watering":
+                                        self.add_debug_message(f"互动: 使用浇水壶浇了水")
+                                    elif interaction_type == "planting":
+                                        seed_name = self.player.selected_seed.split("_")[0]
+                                        self.add_debug_message(f"互动: 种植了{seed_name}种子")
+                                else:
+                                    if interaction_type:
+                                        translated_type = self.translate_obstacle(interaction_type)
+                                        self.add_debug_message(f"互动: 无法与{translated_type}互动")
+                                    else:
+                                        self.add_debug_message(f"互动: 这里没有可以互动的物体")
                 elif event.key == pygame.K_i:  # Inventory
                     # Toggle inventory view
                     self.ui.toggle_inventory()
@@ -144,6 +220,19 @@ class Game:
         # Update cat behavior
         self.cat.update(self.world, self.player)
         
+        # 如果猫被举起，更新猫的位置为玩家位置
+        if self.cat.is_picked_up:
+            self.cat.x = self.player.x
+            self.cat.y = self.player.y
+        
+        # Update fishing status
+        if self.player.fishing_active:
+            result = self.player.update_fishing()
+            if result == "fish_bite":
+                self.add_debug_message("钓鱼: 鱼上钩了！快按E收杆！")
+            elif result == "fish_escape":
+                self.add_debug_message("钓鱼: 鱼跑掉了...")
+        
         # Natural energy drain over time
         self.player.energy_tick()
         
@@ -173,8 +262,9 @@ class Game:
         self.ui.draw(self.current_tool)
         
         # Draw debug messages - 将位置移到屏幕右侧
-        # 使用支持中文的字体
-        font = get_font(is_ascii=False, size=14)
+        # 使用类中初始化的字体，而不是每次调用get_font
+        # font = get_font(is_ascii=False, size=14)  # 删除这一行
+        font = self.debug_font  # 使用初始化好的字体
         y_offset = 100
         
         # 创建调试信息面板背景
@@ -210,6 +300,65 @@ class Game:
         
         pygame.quit()
         sys.exit()
+
+    def is_near_cat(self):
+        """检查玩家是否在猫附近"""
+        return (abs(self.player.x - self.cat.x) <= 1 and 
+                abs(self.player.y - self.cat.y) <= 1 and
+                not self.cat.is_picked_up and
+                not self.cat.is_thrown and
+                not self.cat.is_swimming)
+                
+    def handle_cat_interaction(self, option):
+        """处理猫咪交互菜单的选择"""
+        if option == "抚摸":
+            self.cat.pet()
+            self.add_debug_message("互动: 抚摸了猫咪，好感度提升")
+        elif option == "喂食":
+            # 检查玩家是否有鱼
+            has_fish = False
+            fish_type = None
+            for item in list(self.player.inventory.keys()):
+                if item in self.config.fish_types and self.player.inventory[item] > 0:
+                    has_fish = True
+                    fish_type = item
+                    break
+                    
+            if has_fish:
+                self.player.inventory[fish_type] -= 1
+                self.cat.feed()
+                self.add_debug_message(f"互动: 喂食了{fish_type}，猫咪饱食度提升")
+            else:
+                self.add_debug_message("互动: 没有鱼可以喂食")
+        elif option == "举起":
+            if self.cat.pick_up():
+                self.add_debug_message("互动: 将猫咪举起，按方向键丢出或按E放下")
+        
+        # 隐藏菜单
+        self.ui.hide_interaction_menu()
+
+    def process_cat_dialog(self, text):
+        """处理玩家对猫咪的对话"""
+        if not text or len(text.strip()) == 0:
+            return
+            
+        # 显示玩家说的话
+        self.add_debug_message(f"玩家: {text}")
+        
+        # 检测猫是否在附近
+        if not self.is_cat_nearby_for_chat():
+            self.add_debug_message("猫咪没有在附近，听不到你说话...")
+            return
+            
+        # 将输入转给猫处理
+        response = self.cat.respond_to_dialog(text)
+        self.add_debug_message(f"猫咪: {response}")
+        
+    def is_cat_nearby_for_chat(self):
+        """检查猫是否在附近可以对话（更宽松的范围）"""
+        return (abs(self.player.x - self.cat.x) <= 5 and 
+                abs(self.player.y - self.cat.y) <= 5 and
+                not self.cat.is_thrown)
 
 if __name__ == "__main__":
     game = Game()

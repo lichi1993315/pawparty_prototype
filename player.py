@@ -18,9 +18,14 @@ class Player:
             "cat_food": 10
         }
         
+        # 钓鱼状态
         self.fishing_active = False
-        self.fishing_progress = 0
-        self.fishing_success_chance = 0.7  # Base chance of catching a fish
+        self.fishing_start_time = 0
+        self.fish_bite_time = 0  # 鱼上钩的时间
+        self.waiting_for_fish = False  # 是否在等待鱼上钩
+        self.fish_on_hook = False  # 是否有鱼上钩
+        self.hook_response_time = 2000  # 钓到鱼的响应时间（毫秒）
+        self.fish_escape_time = 0  # 鱼逃走的时间
         
         self.selected_seed = "turnip_seeds"
         
@@ -60,8 +65,7 @@ class Player:
             
             # Cancel fishing if active
             if self.fishing_active:
-                self.fishing_active = False
-                self.fishing_progress = 0
+                self.reset_fishing()  # 使用reset_fishing方法替代直接设置属性
             
             return True
         else:
@@ -166,39 +170,71 @@ class Player:
         return False
     
     def use_fishing_rod(self, world):
-        # Start/continue fishing
+        """使用钓鱼竿"""
         if not self.fishing_active:
             # Try to start fishing
             if world.start_fishing(self.x, self.y):
                 if self.energy >= self.config.energy_consumption["fishing"]:
                     self.fishing_active = True
-                    self.fishing_progress = 0
+                    self.waiting_for_fish = True
+                    self.fish_on_hook = False
+                    current_time = pygame.time.get_ticks()
+                    self.fishing_start_time = current_time
+                    # 随机2-6秒后鱼上钩
+                    self.fish_bite_time = current_time + random.randint(2000, 6000)
                     return True
-        else:
-            # Continue fishing
-            self.fishing_progress += 1
-            
-            # Consume energy
-            self.consume_energy("fishing")
-            
-            # Check for success
-            if self.fishing_progress >= 30:  # After 30 ticks
-                self.fishing_active = False
-                self.fishing_progress = 0
-                
-                # Determine if player caught something
-                fish_type, value = world.catch_fish(difficulty=0.3)
+        return False
+    
+    def update_fishing(self):
+        """更新钓鱼状态"""
+        if not self.fishing_active:
+            return
+        
+        current_time = pygame.time.get_ticks()
+        
+        # 检查是否到了鱼上钩的时间
+        if self.waiting_for_fish and current_time >= self.fish_bite_time:
+            self.fish_on_hook = True
+            self.waiting_for_fish = False
+            self.fish_escape_time = current_time + self.hook_response_time
+            return "fish_bite"  # 返回鱼上钩的信息
+        
+        # 检查鱼是否逃走
+        if self.fish_on_hook and current_time >= self.fish_escape_time:
+            self.reset_fishing()
+            return "fish_escape"  # 返回鱼逃走的信息
+        
+        return None
+    
+    def try_catch_fish(self):
+        """尝试钓鱼"""
+        if self.fish_on_hook:
+            current_time = pygame.time.get_ticks()
+            if current_time <= self.fish_escape_time:
+                # 成功钓到鱼
+                fish_type, value = self.world.catch_fish(difficulty=0.3)
+                self.reset_fishing()
                 if fish_type:
-                    # Add to inventory
+                    # 添加到背包
                     if fish_type in self.inventory:
                         self.inventory[fish_type] += 1
                     else:
                         self.inventory[fish_type] = 1
-                    
                     self.money += value
-                    return True
-        
-        return False
+                    return ("fish_caught", fish_type, value)
+            else:
+                self.reset_fishing()
+                return ("fish_escape", None, 0)
+        return (None, None, 0)
+    
+    def reset_fishing(self):
+        """重置钓鱼状态"""
+        self.fishing_active = False
+        self.waiting_for_fish = False
+        self.fish_on_hook = False
+        self.fishing_start_time = 0
+        self.fish_bite_time = 0
+        self.fish_escape_time = 0
     
     def interact(self, world, cat=None):
         # Try to interact with objects/NPCs in front of the player
@@ -227,10 +263,9 @@ class Player:
         screen_x = (self.x - view_x_start) * self.config.tile_size
         screen_y = (self.y - view_y_start) * self.config.tile_size
         
-        # Create and render the player character
-        pygame.font.init()
-        default_font = pygame.font.get_default_font()
-        font = pygame.font.Font(default_font, self.config.tile_size)
+        # 使用我们的get_font函数而不是直接创建新字体
+        from game.util import get_font
+        font = get_font(is_ascii=True, size=self.config.tile_size)
         text_surface = font.render(self.symbol, True, self.color)
         screen.blit(text_surface, (screen_x, screen_y))
         

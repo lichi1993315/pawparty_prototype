@@ -5,6 +5,9 @@ class Config:
         self.screen_height = 600
         self.tile_size = 24  # Size of ASCII tiles
         
+        # Font cache
+        self.ascii_font = None  # 将用于缓存ASCII字体
+        
         # Map settings
         self.map_width = 50
         self.map_height = 40
@@ -18,7 +21,7 @@ class Config:
             "watering_can": 1,
             "seeds": 1,
             "harvest": 1,
-            "fishing": 5,  # Per minute
+            "fishing": 2,  # 降低钓鱼消耗
             "gathering": 3,
             "mining": 5,
             "walking": 0.1
@@ -33,7 +36,8 @@ class Config:
         self.cat_follow_distance = 3
         self.cat_max_affection = 100
         self.cat_max_hunger = 100
-        self.cat_hunger_rate = 0.05  # Per game minute
+        self.cat_hunger_rate = 0.02  # 降低猫的饥饿增长速度
+        self.cat_fishing_chance = 0.4  # 猫捕鱼的成功率
         
         # Farm settings
         self.crop_types = {
@@ -70,6 +74,16 @@ class Config:
                 "difficulty": 4,
                 "value": 150,
                 "season": "fall"
+            },
+            "carp": {  # 新增鱼类
+                "difficulty": 2,
+                "value": 60,
+                "season": "all"
+            },
+            "catfish": {  # 新增鱼类
+                "difficulty": 5,
+                "value": 200,
+                "season": "summer"
             }
         }
         
