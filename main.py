@@ -8,6 +8,7 @@ from game.time_system import TimeSystem
 from game.config import Config
 # 注释掉原来的导入，直接在这里实现字体加载
 # from game.util import get_font
+import pygame_gui
 
 class Game:
     def __init__(self):
@@ -81,12 +82,29 @@ class Game:
                     self.process_cat_dialog(input_result)
                 continue
             
-            # Handle key presses
-            if event.type == pygame.KEYDOWN:
-                key_name = pygame.key.name(event.key)
-                self.add_debug_message(f"按键: {key_name}")
-                
-                # 如果正在显示交互菜单，处理菜单操作
+                        # Handle key presses
+        if event.type == pygame.KEYDOWN:
+            key_name = pygame.key.name(event.key)
+            self.add_debug_message(f"按键: {key_name}")
+            
+            # 如果钓鱼小游戏激活，优先处理小游戏输入
+            if self.player.fishing_minigame_active:
+                fishing_result = self.player.handle_fishing_input(event.key)
+                if fishing_result == "correct_direction":
+                    direction_names = ["上", "右", "下", "左"]
+                    self.add_debug_message(f"钓鱼: 跟对了方向! 鱼向{direction_names[self.player.fish_direction]}游")
+                elif fishing_result == "wrong_direction":
+                    self.add_debug_message(f"钓鱼: 方向错了! 张力下降")
+                elif fishing_result == "perfect_reel":
+                    self.add_debug_message(f"钓鱼: 完美收杆! 鱼的体力下降")
+                elif fishing_result == "normal_reel":
+                    self.add_debug_message(f"钓鱼: 普通收杆")
+                elif isinstance(fishing_result, tuple) and fishing_result[0] == "fish_caught":
+                    _, fish_type, value = fishing_result
+                    self.add_debug_message(f"钓鱼: 小游戏成功! 钓到了{fish_type}! 获得{value}金币")
+                return
+            
+            # 如果正在显示交互菜单，处理菜单操作
                 if self.ui.show_interaction_menu:
                     if event.key == pygame.K_w or event.key == pygame.K_UP:
                         self.ui.select_prev_interaction()
@@ -232,6 +250,8 @@ class Game:
                 self.add_debug_message("钓鱼: 鱼上钩了！快按E收杆！")
             elif result == "fish_escape":
                 self.add_debug_message("钓鱼: 鱼跑掉了...")
+            elif result == "line_break":
+                self.add_debug_message("钓鱼: 线断了! 张力太高了")
         
         # Natural energy drain over time
         self.player.energy_tick()
@@ -261,43 +281,22 @@ class Game:
         # Draw UI elements
         self.ui.draw(self.current_tool)
         
-        # Draw debug messages - 将位置移到屏幕右侧
-        # 使用类中初始化的字体，而不是每次调用get_font
-        # font = get_font(is_ascii=False, size=14)  # 删除这一行
-        font = self.debug_font  # 使用初始化好的字体
-        y_offset = 100
-        
-        # 创建调试信息面板背景
-        debug_panel_width = 300
-        debug_panel_x = self.width - debug_panel_width - 10  # 距离右边缘10像素
-        pygame.draw.rect(self.screen, (0, 0, 0), 
-                        (debug_panel_x, y_offset - 10, debug_panel_width, len(self.debug_messages) * 20 + 20))
-        pygame.draw.rect(self.screen, (50, 50, 50), 
-                        (debug_panel_x, y_offset - 10, debug_panel_width, len(self.debug_messages) * 20 + 20), 1)
-        
-        # 绘制调试信息标题
-        title_surface = font.render("调试信息", True, (200, 200, 200))
-        self.screen.blit(title_surface, (debug_panel_x + 10, y_offset - 5))
-        y_offset += 15
-        
-        for message in self.debug_messages:
-            text_surface = font.render(message, True, (255, 255, 255))
-            self.screen.blit(text_surface, (debug_panel_x + 10, y_offset))
-            y_offset += 20
-        
-        # Update display
         pygame.display.flip()
     
     def run(self):
         # Add initial debug message
         self.add_debug_message(f"玩家位置: ({self.player.x}, {self.player.y})")
-        
         while self.running:
-            self.handle_events()
+            for event in pygame.event.get():
+                self.handle_events_single(event)
+                self.ui.ui_manager.process_events(event)
             self.update()
+            time_delta = self.clock.tick(self.fps) / 1000.0
+            self.ui.ui_manager.update(time_delta)
+            self.ui.update_status_bar()
+            self.ui.update_debug_panel(self.debug_messages)
             self.draw()
-            self.clock.tick(self.fps)
-        
+            self.ui.ui_manager.draw_ui(self.screen)
         pygame.quit()
         sys.exit()
 
@@ -359,6 +358,159 @@ class Game:
         return (abs(self.player.x - self.cat.x) <= 5 and 
                 abs(self.player.y - self.cat.y) <= 5 and
                 not self.cat.is_thrown)
+
+    # 新增单事件处理方法，原handle_events内容迁移到此
+    def handle_events_single(self, event):
+        if event.type == pygame.QUIT:
+            self.running = False
+        # 处理pygame_gui按钮点击事件（猫咪互动菜单）
+        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+            if hasattr(event.ui_element, 'object_id') and event.ui_element.object_id.startswith('#cat_menu_'):
+                option = event.ui_element.text
+                self.handle_cat_interaction(option)
+                self.ui.hide_interaction_menu()
+                return
+            # 处理对话输入框提交按钮
+            if hasattr(event.ui_element, 'object_id') and event.ui_element.object_id == '#dialog_submit_btn':
+                if self.ui.dialog_text_entry is not None:
+                    text = self.ui.dialog_text_entry.get_text()
+                    if text.strip():
+                        self.process_cat_dialog(text)
+                self.ui.toggle_text_input()
+                return
+        # 处理对话输入框回车提交
+        if event.type == pygame_gui.UI_TEXT_ENTRY_FINISHED:
+            if self.ui.dialog_text_entry is not None and event.ui_element == self.ui.dialog_text_entry:
+                text = event.text
+                if text.strip():
+                    self.process_cat_dialog(text)
+                self.ui.toggle_text_input()
+                return
+        # 如果文本输入框激活，优先处理文本输入（已迁移为pygame_gui，不再需要原逻辑）
+        if self.ui.show_text_input:
+            return
+        # Handle key presses
+        if event.type == pygame.KEYDOWN:
+            key_name = pygame.key.name(event.key)
+            self.add_debug_message(f"按键: {key_name}")
+            # 如果正在显示交互菜单，处理菜单操作
+            if self.ui.show_interaction_menu:
+                if event.key == pygame.K_w or event.key == pygame.K_UP:
+                    self.ui.select_prev_interaction()
+                elif event.key == pygame.K_s or event.key == pygame.K_DOWN:
+                    self.ui.select_next_interaction()
+                elif event.key == pygame.K_e or event.key == pygame.K_RETURN:
+                    self.handle_cat_interaction(self.ui.get_selected_interaction())
+                elif event.key == pygame.K_ESCAPE:
+                    self.ui.hide_interaction_menu()
+                return
+            # 如果猫被举起，处理猫的投掷
+            if self.cat.is_picked_up:
+                if event.key == pygame.K_w or event.key == pygame.K_UP:
+                    self.cat.throw(0)  # 向上丢
+                    self.add_debug_message(f"互动: 将猫丢向上方")
+                elif event.key == pygame.K_d or event.key == pygame.K_RIGHT:
+                    self.cat.throw(1)  # 向右丢
+                    self.add_debug_message(f"互动: 将猫丢向右方")
+                elif event.key == pygame.K_s or event.key == pygame.K_DOWN:
+                    self.cat.throw(2)  # 向下丢
+                    self.add_debug_message(f"互动: 将猫丢向下方")
+                elif event.key == pygame.K_a or event.key == pygame.K_LEFT:
+                    self.cat.throw(3)  # 向左丢
+                    self.add_debug_message(f"互动: 将猫丢向左方")
+                elif event.key == pygame.K_e:
+                    # 放下猫
+                    self.cat.is_picked_up = False
+                    self.cat.x = self.player.x
+                    self.cat.y = self.player.y
+                    self.add_debug_message(f"互动: 放下了猫")
+                return
+            if event.key == pygame.K_ESCAPE:
+                self.running = False
+            elif event.key == pygame.K_t:  # 打开文本输入框
+                self.ui.toggle_text_input()
+            elif event.key == pygame.K_e:  # 自动交互 - 无需手动切换工具
+                if self.player.fishing_active:
+                    # 如果正在钓鱼，尝试收杆
+                    result, fish_type, value = self.player.try_catch_fish()
+                    if result == "fish_caught":
+                        self.add_debug_message(f"钓鱼: 成功钓到了{fish_type}! 获得{value}金币")
+                    elif result == "fish_escape":
+                        self.add_debug_message(f"钓鱼: 鱼跑掉了...")
+                    elif result == "minigame_start":
+                        self.add_debug_message(f"钓鱼: 开始钓鱼小游戏! 用WASD跟随鱼的移动，空格键收杆!")
+                else:
+                    # 检查是否与猫交互
+                    if self.is_near_cat():
+                        # 打开猫咪交互菜单
+                        self.ui.show_cat_interaction_menu()
+                        return
+                    # 尝试开始钓鱼或其他交互
+                    if self.player.use_fishing_rod(self.world):  # 使用use_fishing_rod替代start_fishing
+                        self.add_debug_message(f"钓鱼: 开始钓鱼...")
+                    else:
+                        # 如果不能钓鱼，尝试其他交互
+                        interact_result = self.player.interact(self.world, self.cat)
+                        # 处理交互结果
+                        if isinstance(interact_result, tuple):
+                            # 返回了(True/False, 交互类型)
+                            success, interaction_type = interact_result
+                            if success:
+                                # 障碍物交互反馈
+                                if interaction_type == "tree":
+                                    translated_obstacle = self.translate_obstacle(interaction_type)
+                                    self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                    self.add_debug_message(f"这棵{translated_obstacle}很高大，需要斧头才能砍伐")
+                                elif interaction_type == "rock":
+                                    translated_obstacle = self.translate_obstacle(interaction_type)
+                                    self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                    self.add_debug_message(f"这块{translated_obstacle}很坚硬，需要镐才能开采")
+                                elif interaction_type == "water":
+                                    translated_obstacle = self.translate_obstacle(interaction_type)
+                                    self.add_debug_message(f"互动: 发现{translated_obstacle}")
+                                    self.add_debug_message(f"这片{translated_obstacle}很深，需要桥或船才能通过")
+                                # 自动工具使用反馈
+                                elif interaction_type == "harvest":
+                                    self.add_debug_message(f"互动: 成功收获了农作物")
+                                elif interaction_type == "forage":
+                                    self.add_debug_message(f"互动: 成功采集了野生物品") 
+                                elif interaction_type == "cat":
+                                    self.add_debug_message(f"互动: 与猫咪互动，好感度提升")
+                                elif interaction_type == "tilling":
+                                    self.add_debug_message(f"互动: 使用锄头耕作了土地")
+                                elif interaction_type == "watering":
+                                    self.add_debug_message(f"互动: 使用浇水壶浇了水")
+                                elif interaction_type == "planting":
+                                    seed_name = self.player.selected_seed.split("_")[0]
+                                    self.add_debug_message(f"互动: 种植了{seed_name}种子")
+                            else:
+                                if interaction_type:
+                                    translated_type = self.translate_obstacle(interaction_type)
+                                    self.add_debug_message(f"互动: 无法与{translated_type}互动")
+                                else:
+                                    self.add_debug_message(f"互动: 这里没有可以互动的物体")
+            elif event.key == pygame.K_i:  # Inventory
+                # Toggle inventory view
+                self.ui.toggle_inventory()
+            # Movement
+            elif event.key == pygame.K_w:
+                self.player.move(0, -1, self.world)
+                self.add_debug_message(f"玩家位置: ({self.player.x}, {self.player.y})")
+            elif event.key == pygame.K_s:
+                self.player.move(0, 1, self.world)
+                self.add_debug_message(f"玩家位置: ({self.player.x}, {self.player.y})")
+            elif event.key == pygame.K_a:
+                self.player.move(-1, 0, self.world)
+                self.add_debug_message(f"玩家位置: ({self.player.x}, {self.player.y})")
+            elif event.key == pygame.K_d:
+                self.player.move(1, 0, self.world)
+                self.add_debug_message(f"玩家位置: ({self.player.x}, {self.player.y})")
+            elif event.key == pygame.K_RETURN:
+                if self.time_system.is_sleep_time() and self.player.at_home():
+                    self.time_system.advance_day()
+                    self.player.sleep()
+                    self.world.update_day()
+                    self.add_debug_message(f"睡眠: 进入下一天")
 
 if __name__ == "__main__":
     game = Game()

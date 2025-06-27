@@ -1,5 +1,7 @@
 import pygame
 from game.util import get_font
+import pygame_gui
+import time
 
 class UI:
     def __init__(self, screen, config, player, cat, time_system):
@@ -35,21 +37,174 @@ class UI:
         self.ascii_font_small = get_font(is_ascii=True, size=14)
         self.ascii_font_medium = get_font(is_ascii=True, size=18)
         self.ascii_font_large = get_font(is_ascii=True, size=24)
+        
+        # 初始化pygame_gui
+        self.ui_manager = pygame_gui.UIManager((self.screen.get_width(), self.screen.get_height()))
+        # 创建底部状态栏面板
+        self.status_panel = pygame_gui.elements.UIPanel(
+            relative_rect=pygame.Rect((0, self.screen.get_height() - 60), (self.screen.get_width(), 60)),
+            manager=self.ui_manager
+        )
+        self.energy_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, 10), (120, 30)),
+            text="能量: 100/100",
+            manager=self.ui_manager,
+            container=self.status_panel
+        )
+        self.money_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((140, 10), (120, 30)),
+            text="金钱: $500",
+            manager=self.ui_manager,
+            container=self.status_panel
+        )
+        self.time_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((self.screen.get_width() - 150, 10), (140, 30)),
+            text="08:00",
+            manager=self.ui_manager,
+            container=self.status_panel
+        )
+        self.date_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((self.screen.get_width() - 300, 10), (140, 30)),
+            text="春季 1日, 第1年",
+            manager=self.ui_manager,
+            container=self.status_panel
+        )
+        # 创建操作提示栏（controls_label），放在底部状态栏下方
+        self.controls_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, self.screen.get_height() - 25), (400, 20)),
+            text="按键说明: [WASD]移动 [E]交互 [I]背包 [T]对话 [Enter]睡觉",
+            manager=self.ui_manager
+        )
+        self.inventory_window = None  # pygame_gui背包窗口
+        self.cat_menu_panel = None  # pygame_gui猫咪互动菜单面板
+        self.cat_menu_buttons = []  # 按钮列表
+        self.dialog_input_panel = None
+        self.dialog_text_entry = None
+        self.dialog_submit_btn = None
+        self.active_notifications = []  # [(panel, expire_time)]
+        self.debug_panel = pygame_gui.elements.UIPanel(
+            relative_rect=pygame.Rect((self.screen.get_width()-310, 100), (300, 170)),
+            manager=self.ui_manager
+        )
+        self.debug_title = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, 0), (120, 22)),
+            text="调试信息",
+            manager=self.ui_manager,
+            container=self.debug_panel
+        )
+        self.debug_labels = [
+            pygame_gui.elements.UILabel(
+                relative_rect=pygame.Rect((10, 30+i*25), (280, 22)),
+                text="",
+                manager=self.ui_manager,
+                container=self.debug_panel
+            ) for i in range(5)
+        ]
     
     def add_notification(self, message, duration=180):  # 3 seconds at 60 FPS
-        self.notifications.append({"message": message, "duration": duration})
+        panel_width, panel_height = 300, 40
+        x = (self.screen.get_width() - panel_width) // 2
+        y = 60 + len(self.active_notifications) * (panel_height + 10)
+        panel = pygame_gui.elements.UIPanel(
+            relative_rect=pygame.Rect((x, y), (panel_width, panel_height)),
+            manager=self.ui_manager
+        )
+        label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, 5), (panel_width-20, 30)),
+            text=message,
+            manager=self.ui_manager,
+            container=panel
+        )
+        expire_time = time.time() + duration/60.0  # duration帧转秒
+        self.active_notifications.append((panel, expire_time))
     
     def toggle_inventory(self):
-        self.show_inventory = not self.show_inventory
+        if self.inventory_window is not None:
+            self.inventory_window.kill()
+            self.inventory_window = None
+            self.show_inventory = False
+        else:
+            self.show_inventory = True
+            # 创建背包窗口
+            self.inventory_window = pygame_gui.elements.UIWindow(
+                rect=pygame.Rect((self.screen.get_width()//2-200, self.screen.get_height()//2-150), (400, 300)),
+                manager=self.ui_manager,
+                window_display_title="物品栏"
+            )
+            # 物品名称的中文翻译
+            item_translations = {
+                "turnip_seeds": "萝卜种子",
+                "potato_seeds": "土豆种子",
+                "tomato_seeds": "番茄种子",
+                "cat_food": "猫粮",
+                "turnip": "萝卜",
+                "potato": "土豆",
+                "tomato": "番茄",
+                "anchovy": "凤尾鱼",
+                "tuna": "金枪鱼",
+                "salmon": "三文鱼",
+                "mushroom": "蘑菇",
+                "berry": "浆果",
+                "herb": "草药"
+            }
+            items_y = 40
+            items_x = 20
+            for item_name, count in self.player.inventory.items():
+                if count > 0:
+                    display_name = item_translations.get(item_name, item_name.replace('_', ' ').title())
+                    item_text = f"{display_name}: {count}"
+                    pygame_gui.elements.UILabel(
+                        relative_rect=pygame.Rect((items_x, items_y), (160, 24)),
+                        text=item_text,
+                        manager=self.ui_manager,
+                        container=self.inventory_window
+                    )
+                    items_y += 28
+                    if items_y > 240:
+                        items_y = 40
+                        items_x += 180
     
     def show_cat_interaction_menu(self):
-        """显示与猫互动的菜单"""
+        # 强制重新创建菜单，确保新布局生效
+        if self.cat_menu_panel is not None:
+            self.cat_menu_panel.kill()
+            self.cat_menu_panel = None
+            self.cat_menu_buttons = []
+        
+        panel_width, panel_height = 200, 300  # 再增高
+        panel_x = (self.screen.get_width() - panel_width) // 2
+        panel_y = (self.screen.get_height() - panel_height) // 2
+        self.cat_menu_panel = pygame_gui.elements.UIPanel(
+            relative_rect=pygame.Rect((panel_x, panel_y), (panel_width, panel_height)),
+            manager=self.ui_manager
+        )
+        # 标题
+        pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((0, 10), (panel_width, 30)),
+            text="猫咪互动",
+            manager=self.ui_manager,
+            container=self.cat_menu_panel
+        )
+        options = ["抚摸", "喂食", "举起", "取消"]
+        self.cat_menu_buttons = []
+        for i, option in enumerate(options):
+            btn = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((30, 40 + i*40), (140, 32)),  # 起始40，间距40
+                text=option,
+                manager=self.ui_manager,
+                container=self.cat_menu_panel,
+                object_id=f"#cat_menu_{option}"
+            )
+            self.cat_menu_buttons.append(btn)
         self.show_interaction_menu = True
-        self.interaction_options = ["抚摸", "喂食", "举起", "取消"]
+        self.interaction_options = options
         self.selected_interaction = 0
     
     def hide_interaction_menu(self):
-        """隐藏交互菜单"""
+        if self.cat_menu_panel is not None:
+            self.cat_menu_panel.kill()
+            self.cat_menu_panel = None
+            self.cat_menu_buttons = []
         self.show_interaction_menu = False
         self.interaction_options = []
     
@@ -70,13 +225,39 @@ class UI:
         return None
     
     def toggle_text_input(self):
-        """切换文本输入框的显示状态"""
-        self.show_text_input = not self.show_text_input
-        if self.show_text_input:
-            self.input_active = True
-            self.input_text = ""  # 重置输入文本
-        else:
+        if self.dialog_input_panel is not None:
+            self.dialog_input_panel.kill()
+            self.dialog_input_panel = None
+            self.dialog_text_entry = None
+            self.dialog_submit_btn = None
+            self.show_text_input = False
             self.input_active = False
+        else:
+            self.show_text_input = True
+            self.input_active = True
+            # 创建输入框面板
+            panel_width, panel_height = 400, 80
+            panel_x = (self.screen.get_width() - panel_width) // 2
+            panel_y = self.screen.get_height() - 120
+            self.dialog_input_panel = pygame_gui.elements.UIPanel(
+                relative_rect=pygame.Rect((panel_x, panel_y), (panel_width, panel_height)),
+                manager=self.ui_manager
+            )
+            # 输入框
+            self.dialog_text_entry = pygame_gui.elements.UITextEntryLine(
+                relative_rect=pygame.Rect((100, 20), (200, 30)),
+                manager=self.ui_manager,
+                container=self.dialog_input_panel
+            )
+            self.dialog_text_entry.set_text("")
+            # 提交按钮
+            self.dialog_submit_btn = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((310, 20), (70, 30)),
+                text="发送",
+                manager=self.ui_manager,
+                container=self.dialog_input_panel,
+                object_id="#dialog_submit_btn"
+            )
     
     def handle_text_input(self, event):
         """处理文本输入事件"""
@@ -155,12 +336,6 @@ class UI:
         # Draw cat info in top right
         self.draw_cat_info()
         
-        # Draw game controls help
-        help_y = self.screen.get_height() - 60
-        controls_text = "按键说明: [WASD]移动 [E]交互 [I]背包 [T]对话 [Enter]睡觉"
-        controls_surface = self.font_small.render(controls_text, True, (200, 200, 200))
-        self.screen.blit(controls_surface, (10, help_y))
-        
         # 绘制交互菜单
         if self.show_interaction_menu:
             self.draw_interaction_menu()
@@ -168,6 +343,10 @@ class UI:
         # 绘制文本输入框
         if self.show_text_input:
             self.draw_text_input()
+            
+        # 绘制钓鱼小游戏界面
+        if self.player.fishing_minigame_active:
+            self.draw_fishing_minigame()
     
     def draw_status_bar(self, current_tool):
         # Draw a black bar at the bottom
@@ -216,39 +395,12 @@ class UI:
             self.screen.blit(tool_surface, (350, self.screen.get_height() - 45))
     
     def draw_notifications(self):
-        # Update notification timers and remove expired ones
-        i = 0
-        while i < len(self.notifications):
-            self.notifications[i]["duration"] -= 1
-            if self.notifications[i]["duration"] <= 0:
-                self.notifications.pop(i)
-            else:
-                i += 1
-        
-        # Draw active notifications
-        y_offset = 10
-        for notification in self.notifications:
-            message = notification["message"]
-            
-            # Calculate alpha based on remaining duration
-            alpha = min(255, notification["duration"] * 3)
-            
-            # Create a text surface with Chinese font
-            text_surface = self.font_medium.render(message, True, self.config.colors["text"])
-            
-            # Create a transparent surface for the background
-            background = pygame.Surface((text_surface.get_width() + 20, text_surface.get_height() + 10))
-            background.set_alpha(150)
-            background.fill((0, 0, 0))
-            
-            # Position in center top
-            x = (self.screen.get_width() - text_surface.get_width()) // 2
-            
-            # Draw background and text
-            self.screen.blit(background, (x - 10, y_offset))
-            self.screen.blit(text_surface, (x, y_offset + 5))
-            
-            y_offset += text_surface.get_height() + 15
+        # 清理过期通知
+        now = time.time()
+        for panel, expire in self.active_notifications[:]:
+            if now > expire:
+                panel.kill()
+                self.active_notifications.remove((panel, expire))
     
     def draw_inventory(self):
         # Semi-transparent background
@@ -380,4 +532,158 @@ class UI:
             option_surface = self.font_small.render(option, True, color)
             option_x = menu_x + 20
             option_y = menu_y + 40 + i * 30
-            self.screen.blit(option_surface, (option_x, option_y)) 
+            self.screen.blit(option_surface, (option_x, option_y))
+    
+    def update_status_bar(self):
+        self.energy_label.set_text(f"能量: {int(self.player.energy)}/{self.config.max_energy}")
+        self.money_label.set_text(f"金钱: ${self.player.money}")
+        self.time_label.set_text(self.time_system.get_time_string())
+        self.date_label.set_text(self.time_system.get_date_string())
+        self.controls_label.set_text("按键说明: [WASD]移动 [E]交互 [I]背包 [T]对话 [Enter]睡觉")
+        # 清理过期通知
+        now = time.time()
+        for panel, expire in self.active_notifications[:]:
+            if now > expire:
+                panel.kill()
+                self.active_notifications.remove((panel, expire)) 
+    
+    def update_debug_panel(self, debug_messages):
+        for i, label in enumerate(self.debug_labels):
+            label.set_text(debug_messages[i] if i < len(debug_messages) else "")
+    
+    def draw_fishing_minigame(self):
+        """绘制钓鱼小游戏界面"""
+        if not self.player.fishing_minigame_active:
+            return
+            
+        # 小游戏面板位置和大小
+        panel_width = 400
+        panel_height = 300
+        panel_x = (self.screen.get_width() - panel_width) // 2
+        panel_y = (self.screen.get_height() - panel_height) // 2
+        
+        # 绘制半透明背景
+        overlay = pygame.Surface((self.screen.get_width(), self.screen.get_height()))
+        overlay.set_alpha(150)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+        
+        # 绘制主面板
+        pygame.draw.rect(self.screen, (30, 30, 30), 
+                         (panel_x, panel_y, panel_width, panel_height))
+        pygame.draw.rect(self.screen, (100, 100, 100), 
+                         (panel_x, panel_y, panel_width, panel_height), 3)
+        
+        # 标题
+        title = "钓鱼小游戏"
+        title_surface = self.font_large.render(title, True, (255, 255, 255))
+        title_x = panel_x + (panel_width - title_surface.get_width()) // 2
+        self.screen.blit(title_surface, (title_x, panel_y + 10))
+        
+        # 绘制鱼的耐力条
+        stamina_y = panel_y + 50
+        stamina_width = panel_width - 40
+        stamina_height = 20
+        stamina_x = panel_x + 20
+        
+        # 耐力条背景
+        pygame.draw.rect(self.screen, (60, 60, 60), 
+                         (stamina_x, stamina_y, stamina_width, stamina_height))
+        
+        # 耐力条前景
+        stamina_pct = self.player.fish_stamina / self.player.fish_max_stamina
+        pygame.draw.rect(self.screen, (255, 100, 100), 
+                         (stamina_x, stamina_y, stamina_width * stamina_pct, stamina_height))
+        
+        # 耐力条标签
+        stamina_text = f"鱼的体力: {int(self.player.fish_stamina)}/{self.player.fish_max_stamina}"
+        stamina_surface = self.font_medium.render(stamina_text, True, (255, 255, 255))
+        self.screen.blit(stamina_surface, (stamina_x, stamina_y - 25))
+        
+        # 绘制张力条
+        tension_y = panel_y + 100
+        tension_width = panel_width - 40
+        tension_height = 20
+        tension_x = panel_x + 20
+        
+        # 张力条背景
+        pygame.draw.rect(self.screen, (60, 60, 60), 
+                         (tension_x, tension_y, tension_width, tension_height))
+        
+        # 张力条前景 - 颜色根据张力值变化
+        tension_pct = self.player.tension / 100
+        if self.player.tension < 30:
+            tension_color = (255, 100, 100)  # 红色 - 危险
+        elif self.player.tension > 70:
+            tension_color = (255, 200, 100)  # 橙色 - 警告
+        else:
+            tension_color = (100, 255, 100)  # 绿色 - 安全
+            
+        pygame.draw.rect(self.screen, tension_color, 
+                         (tension_x, tension_y, tension_width * tension_pct, tension_height))
+        
+        # 张力条标签
+        tension_text = f"鱼线张力: {int(self.player.tension)}/100"
+        tension_surface = self.font_medium.render(tension_text, True, (255, 255, 255))
+        self.screen.blit(tension_surface, (tension_x, tension_y - 25))
+        
+        # 绘制力度条
+        power_y = panel_y + 150
+        power_width = panel_width - 40
+        power_height = 30
+        power_x = panel_x + 20
+        
+        # 力度条背景
+        pygame.draw.rect(self.screen, (60, 60, 60), 
+                         (power_x, power_y, power_width, power_height))
+        
+        # 完美区域标记
+        perfect_start_x = power_x + (self.player.perfect_zone_start / 100) * power_width
+        perfect_end_x = power_x + (self.player.perfect_zone_end / 100) * power_width
+        pygame.draw.rect(self.screen, (100, 255, 100), 
+                         (perfect_start_x, power_y, perfect_end_x - perfect_start_x, power_height))
+        
+        # 当前力度指示器
+        current_power_x = power_x + (self.player.reel_power / 100) * power_width
+        pygame.draw.rect(self.screen, (255, 255, 255), 
+                         (current_power_x - 2, power_y - 5, 4, power_height + 10))
+        
+        # 力度条标签
+        power_text = f"收杆力度: {int(self.player.reel_power)}/100"
+        power_surface = self.font_medium.render(power_text, True, (255, 255, 255))
+        self.screen.blit(power_surface, (power_x, power_y - 25))
+        
+        # 绘制鱼的方向指示
+        direction_y = panel_y + 200
+        direction_names = ["↑ 上", "→ 右", "↓ 下", "← 左"]
+        direction_text = f"鱼游向: {direction_names[self.player.fish_direction]}"
+        direction_surface = self.font_medium.render(direction_text, True, (255, 255, 100))
+        direction_x = panel_x + (panel_width - direction_surface.get_width()) // 2
+        self.screen.blit(direction_surface, (direction_x, direction_y))
+        
+        # 绘制操作说明
+        instructions = [
+            "用 WASD 跟随鱼的游动方向",
+            "按 空格键 收杆 (在绿色区域内效果最佳)",
+            "保持张力避免断线或鱼逃跑"
+        ]
+        
+        for i, instruction in enumerate(instructions):
+            instruction_surface = self.font_small.render(instruction, True, (200, 200, 200))
+            instruction_x = panel_x + 20
+            instruction_y = panel_y + 230 + i * 18
+            self.screen.blit(instruction_surface, (instruction_x, instruction_y))
+        
+        # 绘制时间进度条
+        current_time = pygame.time.get_ticks()
+        time_elapsed = current_time - self.player.minigame_timer
+        time_progress = min(1.0, time_elapsed / self.player.max_minigame_time)
+        
+        time_bar_y = panel_y + panel_height - 15
+        time_bar_width = panel_width - 40
+        time_bar_x = panel_x + 20
+        
+        pygame.draw.rect(self.screen, (60, 60, 60), 
+                         (time_bar_x, time_bar_y, time_bar_width, 10))
+        pygame.draw.rect(self.screen, (255, 255, 0), 
+                         (time_bar_x, time_bar_y, time_bar_width * time_progress, 10)) 
